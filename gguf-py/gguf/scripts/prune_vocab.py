@@ -15,6 +15,7 @@ Alternatively, --keep-count selects the top N by frequency (needs a calibration 
 import argparse
 import sys
 import json
+import logging
 from pathlib import Path
 from typing import Optional, Set, Dict, List
 import numpy as np
@@ -24,6 +25,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from gguf_reader import GGUFReader
 from gguf_writer import GGUFWriter
 from constants import GGUFValueType
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("prune-vocab")
 
 
 class VocabPruner:
@@ -55,7 +59,7 @@ class VocabPruner:
                     try:
                         keep_tokens.add(int(line))
                     except ValueError:
-                        print(f"Warning: skipping invalid token ID: {line}", file=sys.stderr)
+                        logger.warning(f"Skipping invalid token ID: {line}")
         return keep_tokens
 
     def build_remap(self, keep_tokens: Set[int]) -> Dict[int, int]:
@@ -72,7 +76,7 @@ class VocabPruner:
 
         # Validation: check no gaps in the original token space
         if len(keep_sorted) < self.n_vocab:
-            print(f"Pruning {self.n_vocab} -> {len(keep_sorted)} vocab", file=sys.stderr)
+            logger.info(f"Pruning {self.n_vocab} -> {len(keep_sorted)} vocab")
 
         return remap, set(keep_sorted)
 
@@ -130,7 +134,7 @@ class VocabPruner:
         writer.add_meta_value("pruning_remap", json.dumps(remap_meta))
 
         writer.write_header_and_data(close=True)
-        print(f"Wrote pruned model to {output_path}", file=sys.stderr)
+        logger.info(f"Wrote pruned model to {output_path}")
 
 
 def main():
@@ -147,8 +151,8 @@ def main():
 
     pruner = VocabPruner(args.input)
 
-    print(f"Model vocab size: {pruner.n_vocab}", file=sys.stderr)
-    print(f"Tied embeddings: {pruner.has_tied_embeddings}", file=sys.stderr)
+    logger.info(f"Model vocab size: {pruner.n_vocab}")
+    logger.info(f"Tied embeddings: {pruner.has_tied_embeddings}")
 
     if args.keep_tokens:
         keep_tokens = pruner.load_keep_tokens(args.keep_tokens)
