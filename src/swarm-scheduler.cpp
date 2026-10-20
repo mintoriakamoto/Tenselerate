@@ -17,8 +17,6 @@ SwarmScheduler::SwarmScheduler(
     shared_prefix_.cache_size_bytes = 0;
     shared_prefix_.kv_cache_k = nullptr;
     shared_prefix_.kv_cache_v = nullptr;
-
-    agents_.reserve(max_agents);
 }
 
 void SwarmScheduler::init_shared_prefix(const std::vector<int32_t>& prefix_tokens) {
