@@ -12,7 +12,10 @@ The keep-tokens file is line-delimited token IDs to retain.
 Alternatively, --keep-count selects the top N by frequency (needs a calibration corpus).
 """
 
+from __future__ import annotations
+
 import argparse
+import os
 import sys
 import json
 import logging
@@ -20,11 +23,13 @@ from pathlib import Path
 from typing import Optional, Set, Dict, List
 import numpy as np
 
-# Import GGUF utilities
-sys.path.insert(0, str(Path(__file__).parent.parent))
-from gguf_reader import GGUFReader
-from gguf_writer import GGUFWriter
-from constants import GGUFValueType
+# Necessary to load the local gguf package
+if "NO_LOCAL_GGUF" not in os.environ and (Path(__file__).parent.parent.parent.parent / 'gguf-py').exists():
+    sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+from gguf.gguf_reader import GGUFReader  # noqa: E402
+from gguf.gguf_writer import GGUFWriter  # noqa: E402
+from gguf.constants import GGUFValueType  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("prune-vocab")
