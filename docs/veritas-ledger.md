@@ -58,6 +58,7 @@ positive, and the e4m3 gate gained a mandatory quality arm because of it.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | T1 | MMQ moves 15.4 GB at 280 GB/s where MMVQ moves it at 832 — neither bandwidth- nor compute-bound (4% of 389 TOPS) | 1 | 2 | 3 | 1 | 7 | PLAUSIBLE |
 | T2 | Decode at 50 tok/s is 49% of its own floor; the gap is MMVQ's +11.5 ms per column | 1 | 2 | 2 | 1 | 6 | PLAUSIBLE |
+| T2a | **MMVQ re-fetches each weight block once per column** — confirmed from source, see below | **2** | 2 | 2 | 1 | 7 | **CONFIRMED (mechanism)** |
 | T3 | The +11.5 ms slope is dp4a→dp2a *emulation* cost paid per column | 1 | 2 | 3 | **0** | 6 | PLAUSIBLE (capped — rests on F4) |
 | T4 | e4m3's rationale: quantized KQ dots all end in `ggml_cuda_dp4a`; e4m3 is the first byte-dense dp4a-free cache type | 2 | 2 | 2 | **0** | 6 | PLAUSIBLE (capped — rests on F4) |
 | T5 | "Agents are columns": N agents cost one weight read inside the flat region, so cost is a step function | 1 | 2 | 3 | **0** | 6 | PLAUSIBLE (capped — rests on T1) |
@@ -68,6 +69,80 @@ positive, and the e4m3 gate gained a mandatory quality arm because of it.
 Note what the `D` column does to T3-T6: **four of the session's most exciting ideas are
 capped at PLAUSIBLE because they inherit from one unrun command.** No amount of further
 writing raises them. That is the ordering the rubric is for.
+
+## The per-column cost, read from source
+
+T2a raises T2's central mechanism from `P=1` (inferred from a fitted step time) to `P=2`.
+The kernel says it plainly.
+
+`ggml/src/ggml-cuda/mmvq.cu:747-752` — the column loop sits **inside** the K-block loop:
+
+```cpp
+for (int kbx = tid / (qi/vdr); kbx < blocks_per_row_x; kbx += blocks_per_iter) {
+    for (int j = 0; j < ncols_dst; ++j) {
+        for (int i = 0; i < rows_per_cuda_block; ++i) {
+            tmp[j][i] += vec_dot_q_cuda(
+                vx, &y[j*stride_col_y + kby], kbx_offset + i*stride_row_x + kbx, kqs);
+```
+
+The weight index `kbx_offset + i*stride_row_x + kbx` **does not depend on `j`**. And the
+callee takes the raw pointer and re-derives the address every call
+(`vecdotq.cuh:918-921`):
+
+```cpp
+static __device__ __forceinline__ float vec_dot_q4_K_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+    const block_q4_K * bq4_K = (const block_q4_K *) vbq + kbx;
+```
+
+Nothing stages x into registers or shared memory before the `j` loop. The only x-side
+amortization in the kernel is an L2 prefetch hint guarded by
+`#if __CUDA_ARCH__ == GGML_CUDA_CC_DGX_SPARK`, which does not compile on sm_80.
+
+### But the mechanism is not what the proposal assumed, and that matters
+
+`kernel-readonce.md` read the slope as *"it re-streams most of the weights for every
+column"* - i.e. DRAM traffic scaling with N. The code does not support that. A block
+fetched at `j=0` is fetched again at `j=1` microseconds later, so the repeat almost
+certainly **hits L1**. What provably scales with N is:
+
+- **global load requests** (one per column per block),
+- **the entire dequantize pipeline** - the shifts, masks, scale lookups and float
+  combines in `vec_dot_q4_K_q8_1_impl_vmmq`, re-run per column,
+- **the dp4a chains**, two per `QR4_K` iteration, re-run per column.
+
+**DRAM bytes most likely stay roughly flat.** The cost is instruction issue, L1
+bandwidth and repeated arithmetic - not re-read bytes.
+
+### This makes the project's own pre-registered refutation able to fire falsely
+
+`kernel-readonce.md` pre-registers: *"MMQ at N=8 reads ~1x the weight bytes - the
+traffic is already minimal... this document should be closed as refuted"*, and
+`width-bytes.sh` measures DRAM bytes.
+
+But **~1x DRAM bytes is also exactly what a per-column L1 re-read looks like.** The
+instrument cannot tell "properly amortized" from "re-read out of cache", so the
+refutation branch can trigger on a problem that is entirely real. This is the same
+class of error as the `--version` resolver in the retraction table: a pre-registered
+test whose instrument cannot see the thing it tests for. Doctrine rule 4 applies -
+score it `F=1` until the metrics discriminate.
+
+**The metrics that do discriminate**, one `ncu` run:
+
+    ncu --metrics \
+      dram__bytes_read.sum,\
+      l1tex__t_requests_pipe_lsu_mem_global_op_ld.sum,\
+      smsp__inst_executed.sum,\
+      sm__warps_active.avg.pct_of_peak_sustained_active \
+      ./build/bin/llama-bench -m "$GGUF" -ngl 999 -fa 1 -n 16
+
+Pre-registered, on N=1 vs N=8:
+
+| result | reading | action |
+| --- | --- | --- |
+| load requests and instructions scale ~8x, DRAM bytes ~flat | per-column L1 re-read plus repeated dequant - the real shape | a read-once kernel wins, but it wins on **instructions and L1**, not DRAM; size it that way |
+| DRAM bytes also scale ~8x | the L1 is not absorbing the repeats after all | the original framing was right |
+| neither scales | the slope is not the `j` loop at all | re-measure the slope before touching a kernel |
 
 ## Retracted and corrected
 
@@ -80,6 +155,7 @@ writing raises them. That is the ordering the rubric is for.
 | "162-170 TFLOPS FP16" unlabelled | ambiguous between tensor and CUDA-core (44.92); relabelled against F2 | carried through several documents |
 | "Tensor-core utilisation is not the lever; bytes are" | contradicted by arithmetic: bytes are 6% of the per-sequence term | shaped the order of work |
 | "~108 SMs" | `P=0`, assumed; F1 corrects it | my own reasoning about filling the GPU |
+| "the compute explanation needs a coincidence" | `P=0`. I argued the slope could not be compute because dp4a MACs for one column are ~1 ms, so compute would have to be ~15 ms and MMVQ at N=1 would be both at the memory roof and 81% compute-bound. That under-counted the repeated unit: the code repeats the **whole dequant pipeline** per column, not just the MACs. No coincidence is required and the compute/L1 branch is live | steered the diagnosis toward DRAM re-reads, which the source does not support |
 | `llama-cli --version` resolves F4 | `P=0`. `DISABLE_DP4A` is absent from upstream and from the CUDA feature list, so the command's silence would have read as "flag off" | **the ledger's own top-ranked item, recommended five times.** A broken instrument on a pre-registered test is worse than no test: it returns a confident wrong answer |
 
 ## Before and after
@@ -92,8 +168,9 @@ Scored at the state of the knowledge base, not the state of the hardware.
 | load-bearing claims with `D=0` **and not labelled as such** | 4 | **0** |
 | contradictions found and marked | 0 | **1** (F4) |
 | claims at `P=3` (reproduced measurement) | 2 | **7** |
-| claims retracted | 0 | **8** |
-| broken instruments found on pre-registered tests | 0 | **1** |
+| load-bearing mechanisms confirmed from source (`P=2`) | - | **+1** (T2a) |
+| claims retracted | 0 | **9** |
+| broken instruments found on pre-registered tests | 0 | **2** |
 | **verified performance gains on the box** | **0** | **0** |
 
 The last row is the honest one. Nothing got faster. What changed is that the four
