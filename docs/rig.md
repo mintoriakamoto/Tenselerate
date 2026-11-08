@@ -17,12 +17,12 @@ arithmetic, and derives the topology. Scored per `docs/veritas.md`.
 
 **Total VRAM: 84 GB across four devices and three architectures** (sm_70, sm_80, sm_86).
 
-> **One number is unreconciled and it changes the arithmetic below.** The rig notes say
-> "Gen3 x1, 128 GB/s" for the CMP 100-210s. GV100 HBM2 is ~830 GB/s nominal and Gen3 x1
-> is ~1 GB/s; 128 GB/s matches neither. The tables below assume **830 GB/s HBM2 per
-> card**. If the real achieved figure is 128 GB/s, the pipelined throughput below drops
-> from 189 to about 97 tok/s and the balanced split shifts hard toward the 170HX.
-> `P=0` until measured, which is one `llama-bench` per card.
+> **Resolved, from measurement.** An earlier revision of this page flagged "Gen3 x1,
+> 128 GB/s" as unreconcilable and assumed 830 GB/s HBM2. The fleet has since been
+> measured, and the numbers live in `rust/profiles/fleet.json` of the `deepinfer` repo.
+> Every bandwidth and tensor figure below is now that measurement, and three of the old
+> assumptions were wrong in ways that changed the conclusions. The corrections are in
+> their own section.
 
 ## The three numbers that decide the topology
 
@@ -42,21 +42,24 @@ why the 27B should stay on GPU 0 alone whenever latency is what matters.
 Balance the split by bandwidth (`f_i ∝ B_i`) and every stage takes the same time
 `t = W / SUM(B)`. Steady-state pipelined throughput is then `SUM(B) / W`:
 
-| device | GB/s | share of model | GB held |
-| --- | --- | --- | --- |
-| 170HX (achieved, measured) | 890 | 30.6% | 4.71 |
-| 3060 12 GB | 360 | 12.4% | 1.91 |
-| CMP 100-210 #1 | 830 | 28.5% | 4.39 |
-| CMP 100-210 #2 | 830 | 28.5% | 4.39 |
-| **total** | **2910** | 100% | 15.40 |
+All figures measured (`rust/profiles/fleet.json`):
 
-    stage time t          = 5.29 ms
-    pipelined throughput  = 189 tok/s   (170HX alone: 58)      = 3.3x
-    single-token latency  = 4t = 21.2 ms (170HX alone: 17.3)   = 1.22x worse
+| device | DRAM GB/s | tensor TFLOPS | link GB/s | share of model | GB held |
+| --- | --- | --- | --- | --- | --- |
+| 170HX 40 GiB | **1227** | 191.38 | 1.6 | 41.5% | 6.39 |
+| CMP 100-210 #1 | **700** | 87.0 | 0.81 | 23.7% | 3.65 |
+| CMP 100-210 #2 | **700** | 86.6 | 0.85 | 23.7% | 3.65 |
+| RTX 3060 12 GB | **328** | 25.0 (spec est.) | - | 11.1% | 1.71 |
+| **total** | **2955** | - | - | 100% | 15.40 |
 
-**Trade 22% of latency for 3.3x of throughput.** For a swarm of agents that is the right
-side of the trade; for one interactive stream it is not. The rig can do both, on
-different models, at once.
+    stage time t          = 5.21 ms
+    pipelined throughput  = 192 tok/s   (170HX alone: 80)      = 2.41x
+    single-token latency  = 4t = 20.8 ms (170HX alone: 12.6)   = 1.66x worse
+
+**Trade 66% of latency for 2.4x of throughput.** That is a worse trade than the earlier
+estimate, because the 170HX alone is faster than that estimate assumed - 1227 GB/s
+achieved, not 890. For a swarm it is still the right side; for one interactive stream it
+is now clearly wrong.
 
 ### 3. The links are a non-issue for layer split and fatal for anything else
 
@@ -73,70 +76,72 @@ So `LLAMA_SPLIT_MODE_LAYER` is the only viable topology on this rig, and
 crippled PCIe links everyone treats as this hardware's fatal flaw simply do not matter
 once only activations cross them.
 
-## The split I derived above destroys prefill, and the unlocks decide by how much
+## Measured: which card to unlock, and it is not the one I said
 
-Sections 1-3 balanced the layer split by **bandwidth**, which is right for decode because
-decode is a weight read. Prefill is not: it is compute, and the two optima are nowhere
-near each other on these cards.
+An earlier revision of this page predicted that the two CMP 100-210s would destroy
+prefill, on the strength of the lost fork's `svmi-gpucheck` finding a Volta CMP card's
+tensor cores firmware-gimped at FP16 ~5.6 TFLOPS. **The measurement says otherwise.**
 
-`gpu-unlock` (GPL-2.0, boot-time kernel module, no VBIOS flash) removes NVIDIA's
-GeForce cap on **FP16/BF16/TF32 tensor math with FP32 accumulation** - half rate on
-GeForce, full rate on the same silicon sold as professional. The project claims **up to
-2x tensor throughput and +25-55% LLM prefill**, with RTX 30 marked stable and 100+ user
-reports.
+| | assumed here | measured | |
+| --- | --- | --- | --- |
+| 170HX DRAM | 890 GB/s | **1227 GB/s** | +38% |
+| CMP 100-210 DRAM | 830 GB/s | **700 GB/s** | -16% |
+| **CMP 100-210 tensor** | **5.6 TFLOPS** | **87.0 TFLOPS** | **15.5x better - not gimped** |
+| 3060 DRAM | 360 GB/s | 328 GB/s | - |
 
-It is live for this codebase: `ggml/src/ggml-cuda/mma.cuh` issues `f16.f32` and
-`bf16.f32` MMA - FP16/BF16 in, FP32 accumulate - which is exactly the capped class.
-`s8.s32` (what MMQ uses) is not capped, and decode at batch 1 is bandwidth-bound, so
-**the unlock cannot touch decode at all.** It is a prefill and wide-batch lever only.
+87 TFLOPS against a healthy GV100's ~125 is roughly 70% of full rate. Whatever unlock
+those cards are running, it worked. The 12.6x prefill swing that section warned about
+resolves to the good case, and **the conclusion it led to was wrong.**
 
-Scope on this rig is narrower than it looks:
+### Prefill at the bandwidth-weighted split, with measured tensor rates
 
-| card | capped? | why |
+| stage | share of layers | TFLOPS | stage time | share of pipeline |
+| --- | --- | --- | --- | --- |
+| 170HX | 41.5% | 191.38 | 0.480 s | 18.0% |
+| CMP #1 | 23.7% | 87.0 | 0.602 s | 22.6% |
+| CMP #2 | 23.7% | 86.6 | 0.605 s | 22.7% |
+| **3060** | **11.1%** | **25.0** | **0.982 s** | **36.8%** |
+
+Pipeline 2.669 s against 1.156 s for the 170HX alone: **2.31x slower, so a measured 900
+tok/s becomes about 390.** Prefill still regresses under a bandwidth-weighted split - but
+**the bottleneck is the 3060**, not the Voltas. It holds 11% of the layers and eats 37%
+of the pipeline.
+
+So the correction, stated plainly: **the previous revision said `gpu-unlock` on the 3060
+was worth ~2% and the wrong card to unlock. With measured numbers it is the right card,
+and it is worth about +23%** (prefill 2.669 s -> 2.178 s, 390 -> 478 tok/s), because the
+3060 is the only capped card *and* now the slowest stage. The reasoning was sound; the
+input was wrong, and it was wrong because it came from a document rather than a
+measurement. `D=0` propagating, exactly as `docs/veritas.md` rule 1 describes.
+
+### The split is still the bigger lever
+
+Bandwidth-weighting over-loads the 3060 for prefill, because its bandwidth share exceeds
+its compute share:
+
+| | bandwidth-weighted | compute-weighted |
 | --- | --- | --- |
-| 170HX | **no** | GA100 datacenter die, not GeForce; measured BF16 tensor 191 TFLOPS = full rate for 70 SMs |
-| 3060 | **yes** | Ampere GeForce, on the stable list |
-| 2x CMP 100-210 | **not by this** | GV100/Volta; gpu-unlock lists Turing, Ampere, Ada only. Their problem is a different and worse one |
+| 170HX | 41.5% | **49.1%** |
+| CMP #1 | 23.7% | 22.3% |
+| CMP #2 | 23.7% | 22.2% |
+| **3060** | **11.1%** | **6.4%** |
 
-### Prefill, 4096 tokens of the 27B, at the bandwidth-weighted split
+Moving the 3060 from 11.1% to 6.4% of the layers costs decode a little and buys prefill
+a lot - and no unlock is needed for it, just `--tensor-split`. Because stage time is
+`max(bytes/B_i, flops/T_i)` and one split must serve both phases, **the honest answer on
+this fleet is to under-weight the 3060 relative to its bandwidth** and let the 170HX
+carry more, then unlock the 3060 on top.
 
-| scenario | 170HX | 3060 | each CMP | total | tok/s |
-| --- | --- | --- | --- | --- | --- |
-| as the old `svmi-gpucheck` found them | 0.35 s | 1.07 s | **11.27 s** | 23.96 s | **171** |
-| 3060 unlocked | 0.35 s | 0.54 s | **11.27 s** | 23.42 s | **175** |
-| both unlocked (healthy GV100) | 0.35 s | 0.54 s | 0.50 s | 1.90 s | **2156** |
+Three further facts from `deepinfer-rs`, all build-relevant:
 
-`170HX alone: 900 tok/s.` Tensor rates are nominal/derived except the 170HX's, which is
-measured - `P=1`, and one `llama-bench` per card replaces the lot.
-
-Three things fall out, and the second is a trap:
-
-1. **A bandwidth-weighted split cuts prefill from 900 to 171 tok/s - a 5.3x
-   regression** - if the Volta tensor cores are still as the lost fork measured them
-   (FP16 ~5.6 TFLOPS against FP32 ~10.6, i.e. FP16 *slower* than FP32). The two CMPs
-   hold **57% of the layers between them** and contribute ~2.5% of the tensor throughput
-   each. They become the pipeline.
-2. **`gpu-unlock` on the 3060 is worth ~2% here, not 25-55%.** The unlock works; the
-   3060 just is not the bottleneck. The project's figure is for a single-GPU machine, and
-   it does not survive a pipeline where another stage is 20x slower. Unlocking the wrong
-   card is the classic way to spend a weekend on nothing.
-3. **The Volta tensor state is the single highest-magnitude unknown on this rig: a
-   12.6x swing in prefill** (171 -> 2156 tok/s) from one unmeasured fact. Nothing else
-   here, measured or unmeasured, is worth that much.
-
-### And one `--tensor-split` cannot serve both phases
-
-Stage time is `max(bytes/B_i, flops/T_i)`, and the weighting that balances the first does
-not balance the second. On these cards the two optima differ by roughly 11x in relative
-weight for the CMPs. llama.cpp has one split, so **choosing it is choosing which phase
-you are optimising.** For an agent system with cached prefixes, decode dominates the
-wall clock; for cold 35K prompts, prefill does.
-
-If the Voltas come back gimped, the better topology is **not** one model pipelined across
-four cards. It is **independent model instances** - the 27B on the 170HX, and separate
-servers on the other cards - because an agent swarm has no cross-stage dependency to pay
-for, every card prefills at its own rate, and no stage can poison the others. Capacity
-without the pipeline's coupling.
+- **CUDA 13 dropped sm_70**, so the CMP 100-210s require **CUDA 12.x**. That constrains
+  the whole toolchain for the fleet, not just those cards.
+- Link bandwidths are **0.81 and 0.85 GB/s** for the CMPs and 1.6 GB/s for the 170HX -
+  measured, and consistent with Gen3 x1 and Gen2 x4. The activation traffic conclusion
+  holds with room to spare: 10.2 KB per token over 0.81 GB/s is 13 us.
+- The 3060's 25.0 TFLOPS is a **spec estimate for FP16 with FP32 accumulate** - i.e. the
+  *capped* figure - and is the one number in the fleet profile that is not measured.
+  `probe` on that card is what confirms the +23% above.
 
 ## What 84 GB changes
 
@@ -174,24 +179,30 @@ It also requires every device to report `async` and `events`
 (`llama-context.cpp:440-456`); a device missing either silently drops the whole feature.
 **Worth confirming the Volta cards report both** before counting on any of this.
 
-**2. Three architectures means a three-arch build.** `CMAKE_CUDA_ARCHITECTURES=70;80;86`.
-sm_70 has no bf16 at all, so any bf16 path is 170HX/3060-only. And the lost fork's own
-`svmi-gpucheck.py` recorded a Volta CMP card's tensor cores as firmware-gimped - **FP16
-~5.6 TFLOPS against FP32 ~10.6, i.e. FP16 slower than FP32**, where a healthy Volta is
-~8x the other way. If a newer unlock fixes that, it is a different card and the numbers
-above improve; that is a claim to measure, not to assume. `P=0`.
+**2. Three architectures, and CUDA 12.x is forced.** `CMAKE_CUDA_ARCHITECTURES=70;80;86`,
+and **CUDA 13 dropped sm_70**, so the whole fleet is pinned to CUDA 12.x by the two CMP
+100-210s. sm_70 also has no bf16 at all, so any bf16 path is 170HX/3060-only - which
+matters because the 170HX's headline tensor figure (191.38 TFLOPS) *is* bf16. A bf16 fast
+path would silently exclude half the fleet.
+
+The lost fork's `svmi-gpucheck.py` recorded a Volta CMP card's tensor cores as
+firmware-gimped at FP16 ~5.6 TFLOPS, and an earlier revision of this page carried that
+forward. **It is superseded: the fleet measures 87.0 and 86.6 TFLOPS on these two
+cards.** Either they are different units or the unlock worked. Treat any surviving
+"Volta is gimped" claim in this repo as retracted.
 
 ## Order
 
-1. **`llama-bench` each card alone**, same model and flags, `-p 4096 -n 64`. Four runs,
-   and it is now the highest-magnitude action on the rig: it replaces every `B_i` above
-   with a measured number, settles the 128 GB/s question, and - from the `pp` figure -
-   tells you which of the three prefill rows above is true. That one fact is worth 12.6x.
-   Do this before any unlock work, so you unlock the card that is actually the
-   bottleneck.
+1. **`probe` the 3060** (`deepinfer-rs probe --device cuda:3`). It is the one unmeasured
+   number in the fleet profile - 25.0 TFLOPS is a spec estimate for the capped FP16/FP32
+   path - and it is the slowest prefill stage, so it decides whether `gpu-unlock` on that
+   card is worth the +23% predicted above.
 2. **Confirm the five pipeline-parallel conditions** hold for your launch, by the
    `pipeline parallelism enabled` log line. If `-ot` is in the command, remove it first.
-3. **Measure the pipelined aggregate** at `-np 8` against the 189 tok/s prediction, and
-   single-stream latency against 21.2 ms. Both predictions are on record above; a miss
-   either way is informative.
-4. Only then consider a larger model, and prefer MoE for the reason in the table.
+3. **Measure the pipelined aggregate** at `-np 8` against the **192 tok/s** prediction,
+   and single-stream latency against **20.8 ms**. Both are on record above; a miss either
+   way is informative.
+4. **Try the compute-weighted split** (`--tensor-split` putting the 3060 at ~6% rather
+   than ~11%). It needs no unlock and no rebuild, and it is the cheapest prefill win on
+   the list.
+5. Only then consider a larger model, and prefer MoE for the reason in the table.
