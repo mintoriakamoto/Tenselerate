@@ -195,5 +195,10 @@ separate on purpose.
    on it.
 5. **T7**, CPU only. The gate exists and is tested.
 
+**Before rebuilding any of the lost fork:** `docs/ports.md`. Upstream landed DFlash,
+DFlash2, EAGLE3 and DSpark while the fork was away, so part of what was lost is now
+redundant, and the one genuine gap (joint survival and a globally ranked draft budget,
+llama.cpp issue #25096) is gated on an offline variance measurement that costs a log tap.
+
 Not on this list: writing anything further about T5. It cannot rise above PLAUSIBLE
 until F4 and T1 resolve, and more prose will not change its score.
