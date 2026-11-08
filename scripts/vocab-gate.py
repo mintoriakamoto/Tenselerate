@@ -207,22 +207,22 @@ def main():
         freq.update(prompt)
     ranked = [tid for tid, _ in freq.most_common()]
 
-    print(f"vocabulary        : {v_orig:,} ids ({len(vocab):,} with pieces)")
-    print(f"emitted tokens    : {len(emitted):,}")
+    print(f"vocabulary        : {v_orig:,} ids ({len(vocab):,} with pieces)")  # noqa: NP100
+    print(f"emitted tokens    : {len(emitted):,}")  # noqa: NP100
     if prompt:
-        print(f"prompt tokens     : {len(prompt):,}")
-    print(f"distinct ids used : {len(freq):,}  "
+        print(f"prompt tokens     : {len(prompt):,}")  # noqa: NP100
+    print(f"distinct ids used : {len(freq):,}  "  # noqa: NP100
           f"({len(freq) / v_orig * 100:.1f}% of the vocabulary)")
 
     ms_per_emitted = args.step_ms / args.accepted_per_step
     ms_per_prompt = 1000.0 / args.prefill_tok_s
-    print(f"\ncost model: {ms_per_emitted:.1f} ms per emitted token, "
+    print(f"\ncost model: {ms_per_emitted:.1f} ms per emitted token, "  # noqa: NP100
           f"{ms_per_prompt:.2f} ms per prompt token\n")
 
     header = (f"{'cut':>8} {'cover':>7} {'head GB':>8} {'saved':>7} "
               f"{'infl-out':>9} {'infl-in':>8} {'net':>8}  verdict")
-    print(header)
-    print("-" * len(header))
+    print(header)  # noqa: NP100
+    print("-" * len(header))  # noqa: NP100
 
     cache = {}
     best = None
@@ -276,32 +276,32 @@ def main():
         if best is None or net > best[1]:
             best = (cut, net, coverage, infl_out, extra_prefill_ms)
 
-        print(f"{cut:>8,} {coverage*100:>6.2f}% {head_gb:>7.2f} "
+        print(f"{cut:>8,} {coverage*100:>6.2f}% {head_gb:>7.2f} "  # noqa: NP100
               f"{saving_frac*100:>6.2f}% {infl_out:>8.4f} {infl_in:>7.4f} "
               f"{net*100:>+7.2f}%  {verdict}")
 
-    print()
+    print()  # noqa: NP100
     if best is None:
         sys.exit("no cut below the vocabulary size was evaluated")
 
     cut, net, coverage, infl_out, extra_prefill_ms = best
     if net <= 0:
-        print(f"VERDICT: no cut tested is a net win. The best, {cut:,}, is "
+        print(f"VERDICT: no cut tested is a net win. The best, {cut:,}, is "  # noqa: NP100
               f"{net*100:+.2f}%.\nRe-tokenization costs more than the head saves. "
               f"Close the item; the head is not where the bytes are.")
     else:
-        print(f"VERDICT: best cut is {cut:,} at {net*100:+.2f}% decode "
+        print(f"VERDICT: best cut is {cut:,} at {net*100:+.2f}% decode "  # noqa: NP100
               f"({coverage*100:.2f}% coverage, {(infl_out-1)*100:+.2f}% more "
               f"output tokens).")
         if extra_prefill_ms:
-            print(f"         prefill pays {extra_prefill_ms/1000:.1f} s extra over "
+            print(f"         prefill pays {extra_prefill_ms/1000:.1f} s extra over "  # noqa: NP100
                   f"this corpus - check that against how often you prefill cold.")
         if net < 0.02:
-            print("         Under 2%. Pruning means a conversion, a re-quantization "
+            print("         Under 2%. Pruning means a conversion, a re-quantization "  # noqa: NP100
                   "and a tokenizer that can no longer round-trip arbitrary text.\n"
                   "         That is a lot of risk for this much; I would not.")
 
-    print("\nReminder: inflation is a greedy-longest-match estimate and is biased\n"
+    print("\nReminder: inflation is a greedy-longest-match estimate and is biased\n"  # noqa: NP100
           "pessimistic. Coverage and the byte savings are exact.")
 
 
