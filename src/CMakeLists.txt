@@ -41,11 +41,21 @@ set(LLAMA_CORE_SOURCES
     llama-vocab.cpp
     unicode-data.cpp
     unicode.cpp
+    llama-optimizations.cpp
+)
+
+# Phase 2 fused kernels (CUDA optimization)
+set(FUSED_KERNEL_CUDA_SOURCES
+    kernels/fused-ffn.cu
+    kernels/fused-ffn-integration.cpp
+    kernels/fused-sparse-attn.cu
+    kernels/fused-sparse-attn-integration.cpp
 )
 
 add_library(llama
             ../include/llama.h
             ${LLAMA_CORE_SOURCES}
+            $<$<BOOL:${GGML_CUDA}>:${FUSED_KERNEL_CUDA_SOURCES}>
             unicode.h
             ${LLAMA_MODELS_SOURCES}
             )
@@ -68,7 +78,32 @@ target_include_directories(llama PRIVATE . ${CMAKE_CURRENT_BINARY_DIR})
 target_include_directories(llama PUBLIC ../include)
 target_compile_features   (llama PRIVATE cxx_std_17) # don't bump
 
+# Include paths for fused kernels (Phase 2)
+target_include_directories(llama PRIVATE kernels)
+
 target_link_libraries(llama PUBLIC ggml)
+
+# CUDA configuration for fused kernels
+if (GGML_CUDA)
+    enable_language(CUDA)
+    set(CMAKE_CUDA_STANDARD 17)
+    set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+
+    # Compiler flags for CUDA kernels
+    target_compile_options(llama PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-O3>)
+    target_compile_options(llama PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math>)
+
+    # Architecture: Default to RTX 3060 Ti (compute capability 86)
+    if (NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+        set(CMAKE_CUDA_ARCHITECTURES 86)
+    endif()
+
+    message(STATUS "[llama] CUDA architectures: ${CMAKE_CUDA_ARCHITECTURES}")
+    message(STATUS "[llama] Phase 2 fused kernels enabled (FFN + sparse attention)")
+
+    # Link CUDA runtime
+    target_link_libraries(llama PRIVATE cuda)
+endif()
 
 if (BUILD_SHARED_LIBS)
     set_target_properties(llama PROPERTIES POSITION_INDEPENDENT_CODE ON)
