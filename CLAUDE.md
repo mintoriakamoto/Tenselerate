@@ -5,3 +5,5 @@ This repository also carries a second standing instruction, which is NOT from up
 retracted. Read it before making or citing any load-bearing numeric claim.
 [docs/veritas-ledger.md](docs/veritas-ledger.md) is the current scored state of what is
 measured and what is only assumed; start there when picking up this work.
+[docs/rig.md](docs/rig.md) describes the one machine everything here is designed for,
+and the topology its arithmetic forces — read it before any multi-GPU or placement work.
