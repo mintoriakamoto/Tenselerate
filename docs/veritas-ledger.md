@@ -56,7 +56,7 @@ positive, and the e4m3 gate gained a mandatory quality arm because of it.
 
 | # | claim | P | F | M | D | Σ | status |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| T1 | MMQ moves 15.4 GB at 280 GB/s where MMVQ moves it at 832 — neither bandwidth- nor compute-bound (4% of 389 TOPS) | 1 | 2 | 3 | 1 | 7 | PLAUSIBLE |
+| T1 | MMQ achieves 280 GB/s where MMVQ achieves 832 — neither bandwidth- nor compute-bound (4% of 389 TOPS). **Mechanism now read from source: occupancy starvation, `docs/mmq-occupancy.md`** | 1 | 2 | 3 | 1 | 7 | PLAUSIBLE |
 | T2 | Decode at 50 tok/s is 49% of its own floor; the gap is MMVQ's +11.5 ms per column | 1 | 2 | 2 | 1 | 6 | PLAUSIBLE |
 | T2a | **MMVQ re-fetches each weight block once per column** — confirmed from source, see below | **2** | 2 | 2 | 1 | 7 | **CONFIRMED (mechanism)** |
 | T3 | The +11.5 ms slope is dp4a→dp2a *emulation* cost paid per column | 1 | 2 | 3 | **0** | 6 | PLAUSIBLE (capped — rests on F4) |
@@ -184,6 +184,37 @@ Scores unchanged: both remain `P=1` on the step times they are fitted from, and 
 corrected `ncu` run in the section above is still what settles them. What changed is the
 denominator, and it moved against us.
 
+## MMQ's 4.4x, taken apart from source
+
+`docs/mmq-occupancy.md` has the full derivation and its pre-registered refutations. The
+short version, because it changes what the biggest item in this ledger is *for*:
+
+Q4_K on Ampere ships `occupancy = 1` (`mmq-config-ampere.cuh:157`), and that field is
+`__launch_bounds__`'s `minBlocksPerMultiprocessor` (`mmq.cuh:962`) — a register budget
+handed to the compiler, not a hardware limit. At decode width the stream-k grid is
+exactly `nsm` blocks (`mmq.cuh:1449-1452`), so one block of 256 threads lands per SM:
+**8 of GA100's 64 warps, 12.5% occupancy, across the whole GPU.**
+
+| occupancy | occ. | threads | in flight | smem | regs/thread | vs. 500 ns need |
+| --- | --- | --- | --- | --- | --- | --- |
+| **1 (shipped)** | **12.5%** | **17,920** | **280 KB** | 40.0 K | 256 | **47%** |
+| 2 | 25.0% | 35,840 | 560 KB | 80.1 K | 128 | 93% |
+
+Shared memory is 40.0 KiB per block and GA100 has 164, so **four blocks would fit**;
+nothing in the hardware asks for 1. Every architecture table on the dp4a path uses 2 or
+more, and all three MMA-layout tables use 1 uniformly — 352 rows of it on Ampere.
+
+Two consequences for this ledger. **The "3x the bytes" mechanism under T1 is retracted**
+(below): occupancy alone predicts a shortfall of the right kind and about half the
+observed size, with no extra traffic required. And the fix is no longer costed as a
+kernel — it is three integers on the small-`J` rows, with `-Xptxas -v` able to kill it
+before any GPU is involved.
+
+T1 and the new `K6`/`K7` stay `PLAUSIBLE`. They rest on the 280 GB/s figure, still
+`P=1`, and on an assumed HBM latency at `P=0`. One `ncu` counter settles all three, and
+it is the same run this ledger has been recommending: `warps_active` near 12.5%
+confirms it, above 25% kills it outright.
+
 ## Retracted and corrected
 
 | claim | what it was | what it cost |
@@ -196,6 +227,7 @@ denominator, and it moved against us.
 | "Tensor-core utilisation is not the lever; bytes are" | contradicted by arithmetic: bytes are 6% of the per-sequence term | shaped the order of work |
 | "~108 SMs" | `P=0`, assumed; F1 corrects it | my own reasoning about filling the GPU |
 | "the compute explanation needs a coincidence" | `P=0`. I argued the slope could not be compute because dp4a MACs for one column are ~1 ms, so compute would have to be ~15 ms and MMVQ at N=1 would be both at the memory roof and 81% compute-bound. That under-counted the repeated unit: the code repeats the **whole dequant pipeline** per column, not just the MACs. No coincidence is required and the compute/L1 branch is live | steered the diagnosis toward DRAM re-reads, which the source does not support |
+| "MMQ moves 3x the bytes" | `P=0`. Nothing in the kernel re-reads the weights per tile, and the occupancy arithmetic in `docs/mmq-occupancy.md` reproduces a shortfall of the observed kind without any extra traffic at all. The 280-vs-832 gap is memory-level parallelism, not volume | the mechanism under the session's largest prize, and it costed the fix as a new kernel when the lever is three integers in a config table |
 | `llama-cli --version` resolves F4 | `P=0`. `DISABLE_DP4A` is absent from upstream and from the CUDA feature list, so the command's silence would have read as "flag off" | **the ledger's own top-ranked item, recommended five times.** A broken instrument on a pre-registered test is worse than no test: it returns a confident wrong answer |
 
 ## Before and after
@@ -209,7 +241,7 @@ Scored at the state of the knowledge base, not the state of the hardware.
 | contradictions found and marked | 0 | **1** (F4) |
 | claims at `P=3` (reproduced measurement) | 2 | **7** |
 | load-bearing mechanisms confirmed from source (`P=2`) | - | **+1** (T2a) |
-| claims retracted | 0 | **9** |
+| claims retracted | 0 | **10** |
 | broken instruments found on pre-registered tests | 0 | **2** |
 | **verified performance gains on the box** | **0** | **0** |
 
@@ -231,8 +263,12 @@ separate on purpose.
    costing throughput right now.
 3. **M4 on CUDA0.** `test-backend-ops -o FLASH_ATTN_EXT -b CUDA0`. The e4m3 kernels
    have never executed; everything claimed about them is CPU-only.
-4. **T1**, one `ncu` run. The 3x prize — but it is `P=1`, so measure it, do not build
-   on it.
+4. **T1**, one `ncu` run — now with a mechanism and a threshold.
+   `sm__warps_active.avg.pct_of_peak_sustained_active` near **12.5%** confirms
+   occupancy starvation; **above 25% refutes it** and the 4.4x has another cause.
+   Cheaper still, and needing no GPU: change the three integers named in
+   `docs/mmq-occupancy.md` and read `-Xptxas -v`. If the kernel will not fit in 128
+   registers per thread, the item is closed.
 5. **T7**, CPU only. The gate exists and is tested.
 
 **Before rebuilding any of the lost fork:** `docs/ports.md`. Upstream landed DFlash,

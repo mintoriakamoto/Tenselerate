@@ -7,3 +7,6 @@ retracted. Read it before making or citing any load-bearing numeric claim.
 measured and what is only assumed; start there when picking up this work.
 [docs/rig.md](docs/rig.md) describes the one machine everything here is designed for,
 and the topology its arithmetic forces — read it before any multi-GPU or placement work.
+[docs/mmq-occupancy.md](docs/mmq-occupancy.md) is the source-level account of the
+largest open prize in the ledger (MMQ at 23% of the card) and the three-integer change
+it argues for — including the `ncu` threshold that refutes it.
