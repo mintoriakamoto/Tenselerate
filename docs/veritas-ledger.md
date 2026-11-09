@@ -144,6 +144,46 @@ Pre-registered, on N=1 vs N=8:
 | DRAM bytes also scale ~8x | the L1 is not absorbing the repeats after all | the original framing was right |
 | neither scales | the slope is not the `j` loop at all | re-measure the slope before touching a kernel |
 
+## Reconciled against the measured fleet
+
+`rust/profiles/fleet.json` in the `deepinfer` repo measures this card at **1227 GB/s
+achieved** (decision kernel) and 1445 GB/s on a read benchmark. This ledger's figures
+came from the lost fork and used **832 GB/s**, derived from MMVQ's 18.5 ms step
+intercept.
+
+**These do not contradict each other, and distinguishing them sharpens T1 and T2.** 832
+is what *the MMVQ kernel achieves*; 1227 is what *the card achieves*. The ledger was
+measuring a kernel and calling it the card.
+
+| | GB/s | weight read | floor per emitted token (MTP 1.88) |
+| --- | --- | --- | --- |
+| MMVQ achieved | 832 | 18.51 ms | 9.85 ms = **102 tok/s** |
+| **card achievable** | **1227** | **12.55 ms** | **6.68 ms = 150 tok/s** |
+| card read benchmark | 1445 | 10.66 ms | 5.67 ms = 176 tok/s |
+
+So T2's headline - *"decode at 50 tok/s is 49% of its own floor"* - is right about MMVQ
+and understates the gap against the hardware:
+
+- **49% of MMVQ's own floor** (the ledger's framing, still true)
+- **33% of the card's achievable floor** (the framing that matters for what is on the
+  table)
+
+And the kernel-efficiency picture in T1 gets worse, which makes it a bigger prize rather
+than a smaller one:
+
+| path | achieved | share of the card's 1227 |
+| --- | --- | --- |
+| MMVQ N=1 | 832 GB/s | **68%** |
+| MMQ flat N=2..16 | 280 GB/s | **23%** |
+
+T1 previously said MMQ moves the bytes at 280 against MMVQ's 832 - a 3x gap between two
+kernels. Against the card it is **4.4x of headroom on MMQ and still 1.5x on MMVQ**.
+Neither kernel is close to the silicon.
+
+Scores unchanged: both remain `P=1` on the step times they are fitted from, and the
+corrected `ncu` run in the section above is still what settles them. What changed is the
+denominator, and it moved against us.
+
 ## Retracted and corrected
 
 | claim | what it was | what it cost |
