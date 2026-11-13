@@ -206,3 +206,34 @@ cards.** Either they are different units or the unlock worked. Treat any survivi
    than ~11%). It needs no unlock and no rebuild, and it is the cheapest prefill win on
    the list.
 5. Only then consider a larger model, and prefer MoE for the reason in the table.
+
+## The Volta cards are first-class in this tree, and the build now refuses to lose them
+
+A claim that the two CMP 100-210s are "depreciating in software" was made from another
+fork's README (`P=1`, and about a different codebase). Read against this tree it is wrong:
+
+- Flash attention has a dedicated Volta tensor-core path: `fattn.cu:224` and `fattn.cu:673`
+  select between the vector, tile and MMA-F16 kernels specifically for `cc == 700`.
+- `mmf.cuh` carries `VOLTA_MMA_AVAILABLE` branches with their own tile geometry.
+- None of the `BEST_FATTN_KERNEL_NONE` returns in `fattn.cu:576-631` depends on the
+  architecture, so nothing falls back to the CPU because a card is Volta.
+
+What the source does show is two ways to lose the cards **silently**, both in the build:
+
+1. `ggml/src/ggml-cuda/CMakeLists.txt:43` drops `70-virtual` from the default list when
+   the toolkit is CUDA 13 or newer. No warning; the binary simply cannot serve sm_70.
+2. `volta_mma_available()` (`common.cuh:360`) is true only when the highest compiled
+   architecture not above the card is **exactly** 700. Build with `61;80;86` and a Volta
+   card resolves to 610: it keeps running, off its tensor-core kernels, with no log line.
+
+Both are closed by `GGML_CUDA_REQUIRE_ARCHS` (`ggml/cmake/cuda-require-archs.cmake`):
+configuration fails unless every listed architecture is compiled, fails on `native`
+because that cannot be verified, and fails outright on a toolkit that cannot target the
+architecture. The `tenselerate-fleet` preset sets it for this machine:
+
+    cmake --preset tenselerate-fleet     # 70-real;80-real;86-real, required: 70;80;86
+
+Still outside the build's reach, and `P=0` until checked on the box: the **driver**.
+Volta support ends with a legacy driver branch, so the machine as a whole has to stay on
+the last branch that still drives sm_70. Record the installed branch here once read from
+`nvidia-smi`, and pin it in the package manager.
