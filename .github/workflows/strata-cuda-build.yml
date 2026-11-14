@@ -1,0 +1,38 @@
+name: Strata CUDA build
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths: ['.github/workflows/strata-cuda-build.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  strata-cuda:
+    runs-on: ubuntu-24.04
+    container: nvidia/cuda:12.8.1-devel-ubuntu24.04
+    steps:
+      - name: Install tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends git cmake ninja-build ca-certificates python3
+
+      - name: Clone
+        uses: actions/checkout@v4
+        with:
+          path: llama.cpp
+
+      - name: Clone Strata
+        run: git clone --depth 1 https://github.com/mintoriakamoto/strata strata
+
+      - name: Configure
+        run: |
+          cmake -S strata -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DSTRATA_ENABLE_CUDA=ON -DSTRATA_BUILD_TESTS=ON \
+            -DSTRATA_GGML_DIR=$GITHUB_WORKSPACE/llama.cpp \
+            -DCMAKE_CUDA_ARCHITECTURES="75;80;86;89;120"
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
