@@ -69,6 +69,11 @@ if (CUDAToolkit_FOUND)
         endif()
     endif()
 
+    set(GGML_CUDA_REQUIRE_ARCHS "" CACHE STRING
+        "ggml: fail configuration unless these CUDA architectures are compiled, e.g. 70;80;86")
+    include(${CMAKE_CURRENT_LIST_DIR}/../../cmake/cuda-require-archs.cmake)
+    ggml_cuda_check_required_archs("${GGML_CUDA_REQUIRE_ARCHS}" "${CMAKE_CUDA_ARCHITECTURES}" "${CUDAToolkit_VERSION}")
+
     enable_language(CUDA)
 
     if (GGML_CUDA_CCCL_VERSION)

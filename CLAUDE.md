@@ -1,1 +1,12 @@
 IMPORTANT: Ensure you’ve thoroughly reviewed the [AGENTS.md](AGENTS.md) file before beginning any work.
+
+This repository also carries a second standing instruction, which is NOT from upstream:
+[docs/veritas.md](docs/veritas.md) — how claims in this fork are sourced, scored and
+retracted. Read it before making or citing any load-bearing numeric claim.
+[docs/veritas-ledger.md](docs/veritas-ledger.md) is the current scored state of what is
+measured and what is only assumed; start there when picking up this work.
+[docs/rig.md](docs/rig.md) describes the one machine everything here is designed for,
+and the topology its arithmetic forces — read it before any multi-GPU or placement work.
+[docs/mmq-occupancy.md](docs/mmq-occupancy.md) is the source-level account of the
+largest open prize in the ledger (MMQ at 23% of the card) and the three-integer change
+it argues for — including the `ncu` threshold that refutes it.
