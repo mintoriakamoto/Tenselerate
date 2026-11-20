@@ -37,12 +37,12 @@ Ensure all Phase 1-4 optimizations meet AGENTS.md standards and are properly sco
   - [ ] Measurement method: `benches/measure-optimizations.sh`
   - [ ] Threshold: ≥ −0.4 GB/token (refutation if less)
   - [ ] Status: UNVERIFIED (P=1, needs P=3)
-  
+
 - [ ] BF16 state: Expected −75 MiB/seq for GDN states
   - [ ] Measurement method: Profile GDN layer memory
   - [ ] Threshold: ≥ −60 MiB/seq
   - [ ] Status: UNVERIFIED (P=1, needs P=3)
-  
+
 - [ ] Swarm scheduler: Expected 1000+ agents with <256 tokens context
   - [ ] Measurement method: Stress test on RTX 3060 Ti
   - [ ] Threshold: ≥ 500 agents
