@@ -20,7 +20,7 @@ import sys
 import json
 import logging
 from pathlib import Path
-from typing import Optional, Set, Dict, List
+from typing import Set, Dict
 import numpy as np
 
 if "NO_LOCAL_GGUF" not in os.environ and (Path(__file__).parent.parent.parent.parent / 'gguf-py').exists():
@@ -28,7 +28,6 @@ if "NO_LOCAL_GGUF" not in os.environ and (Path(__file__).parent.parent.parent.pa
 
 from gguf.gguf_reader import GGUFReader
 from gguf.gguf_writer import GGUFWriter
-from gguf.constants import GGUFValueType
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("prune-vocab")
@@ -49,7 +48,7 @@ class VocabPruner:
                 if "output.weight" in key:
                     return False
             return True
-        except:
+        except (KeyError, AttributeError):
             return True
 
     def load_keep_tokens(self, keep_file: str) -> Set[int]:
