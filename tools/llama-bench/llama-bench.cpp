@@ -441,7 +441,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  --progress                                  print test progress indicators\n");
     printf("  --no-warmup                                 skip warmup runs before benchmarking\n");
     printf("  -fitt, --fit-target <MiB>                   fit model to device memory with this margin per device in MiB (default: off)\n");
-    printf("  -fitc, --fit-ctx <n>                        minimum ctx size for --fit-target (default: 4096)\n");
+    printf("  -fitc, --fit-ctx <n>                        minimum ctx size for --fit-target (default: 0)\n");
     if (llama_supports_rpc()) {
         printf("  -rpc, --rpc <rpc_servers>                   register RPC devices (comma separated)\n");
     }
@@ -499,6 +499,9 @@ static ggml_type ggml_type_from_name(const std::string & s) {
     }
     if (s == "bf16") {
         return GGML_TYPE_BF16;
+    }
+    if (s == "f8_e4m3") {
+        return GGML_TYPE_F8_E4M3;
     }
     if (s == "q8_0") {
         return GGML_TYPE_Q8_0;
@@ -2348,10 +2351,11 @@ int llama_bench(int argc, char ** argv) {
 
             std::vector<size_t> margins(llama_max_devices(), inst.fit_target * 1024 * 1024);
 
-            uint32_t n_ctx_needed = inst.n_prompt + inst.n_gen + inst.n_depth;
+            // fit at least the requested minimum context size, not just the tokens the benchmark processes
+            uint32_t n_ctx_needed = std::max<uint32_t>(inst.n_prompt + inst.n_gen + inst.n_depth, inst.fit_min_ctx);
             cparams.n_ctx = std::max(cparams.n_ctx, n_ctx_needed);
 
-            common_fit_params(inst.model.c_str(), &mparams, &cparams,
+            common_fit_params({ inst.model }, &mparams, &cparams,
                 fit_tensor_split.data(),
                 fit_overrides.data(),
                 margins.data(),
@@ -2375,6 +2379,18 @@ int llama_bench(int argc, char ** argv) {
         }
 
         llama_context * ctx = llama_init_from_model(lmodel, cparams);
+
+        // a model without memory reads a prompt in one ubatch
+        const int n_tokens_max = std::max(inst.n_prompt, inst.n_depth);
+        const bool resize = ctx != NULL && !llama_get_memory(ctx) && (int) llama_n_ubatch(ctx) < n_tokens_max;
+        if (resize) {
+            fprintf(stderr, "%s: the model has no memory, setting n_batch = n_ubatch = %d\n", __func__, n_tokens_max);
+            llama_free(ctx);
+            cparams.n_batch  = n_tokens_max;
+            cparams.n_ubatch = n_tokens_max;
+            ctx = llama_init_from_model(lmodel, cparams);
+        }
+
         if (ctx == NULL) {
             fprintf(stderr, "%s: error: failed to create context with model '%s'\n", __func__, inst.model.c_str());
             llama_model_free(lmodel);
@@ -2382,6 +2398,10 @@ int llama_bench(int argc, char ** argv) {
         }
 
         test t(inst, lmodel, ctx);
+        if (resize) {
+            t.n_batch  = n_tokens_max;
+            t.n_ubatch = n_tokens_max;
+        }
 
         llama_memory_clear(llama_get_memory(ctx), false);
 
